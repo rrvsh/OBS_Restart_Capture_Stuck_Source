@@ -17,6 +17,8 @@ import sys
 import time
 import base64
 import hashlib
+import os
+import argparse
 from datetime import datetime
 from pathlib import Path
 
@@ -28,16 +30,17 @@ except ImportError:
 
 
 class OBSDisplayMonitor:
-    def __init__(self, source_name="Safari", host="localhost", port=4455, password=""):
+    def __init__(self, source_name, host, port, password, interval, threshold, cooldown):
         self.source_name = source_name
         self.host = host
         self.port = port
         self.password = password
         self.ws = None
-        self.running = False
-        self.monitor_interval = 5.0  # Check every 5 seconds
-        self.last_restart_time = 0
-        self.restart_cooldown = 30.0  # Minimum 30 seconds between restarts
+        self.running = True
+        self.monitor_interval = interval
+        self.stuck_threshold = threshold
+        self.last_restart = 0
+        self.restart_cooldown = cooldown
         self.request_id = 1
         
         # Setup logging
@@ -51,7 +54,7 @@ class OBSDisplayMonitor:
         log_file = log_dir / "obs_monitor.log"
         
         logging.basicConfig(
-            level=logging.DEBUG,  # Changed to DEBUG for more detailed output
+            level=logging.INFO,
             format='%(asctime)s - %(levelname)s - %(message)s',
             handlers=[
                 logging.FileHandler(log_file),
@@ -92,22 +95,22 @@ class OBSDisplayMonitor:
                     auth_data['challenge']
                 )
                 
-                # Send Identify with auth
+                # Send Identify with auth and subscribe to all input events
                 payload = {
                     "op": 1,  # Identify OpCode
                     "d": {
                         "rpcVersion": 1,
                         "authentication": auth,
-                        "eventSubscriptions": 33  # General events
+                        "eventSubscriptions": 33 | (1 << 14)  # General events + Input events
                     }
                 }
             else:
-                # Send Identify without auth
+                # Send Identify without auth but with input events subscription
                 payload = {
                     "op": 1,  # Identify OpCode
                     "d": {
                         "rpcVersion": 1,
-                        "eventSubscriptions": 33  # General events
+                        "eventSubscriptions": 33 | (1 << 14)  # General events + Input events
                     }
                 }
             
@@ -222,81 +225,53 @@ class OBSDisplayMonitor:
             self.logger.error(f"Error checking source existence: {e}")
             return False
     
-    def is_source_active(self):
-        """Check if the display capture source is currently active"""
-        try:
-            self.logger.debug(f"Checking if source '{self.source_name}' is active...")
-            
-            # Get current program scene
-            scene_response = self._send_request("GetCurrentProgramScene")
-            if not scene_response:
-                self.logger.warning("Could not get current program scene")
-                return False
-            
-            current_scene = scene_response.get('responseData', {}).get('currentProgramSceneName')
-            if not current_scene:
-                self.logger.warning("Current scene name is empty")
-                return False
-            
-            self.logger.debug(f"Current scene: '{current_scene}'")
-            
-            # Get scene items
-            items_response = self._send_request("GetSceneItemList", {"sceneName": current_scene})
-            if not items_response:
-                self.logger.debug("Could not get scene items, assuming source is OK")
-                return True  # If we can't check, assume it's OK
-            
-            scene_items = items_response.get('responseData', {}).get('sceneItems', [])
-            self.logger.debug(f"Scene has {len(scene_items)} items")
-            
-            # Look for our source
-            source_found_in_scene = False
-            for item in scene_items:
-                item_name = item.get('sourceName', '')
-                if item_name == self.source_name:
-                    source_found_in_scene = True
-                    is_enabled = item.get('sceneItemEnabled', False)
-                    self.logger.debug(f"Found source '{self.source_name}' in scene, enabled: {is_enabled}")
-                    return is_enabled
-                self.logger.debug(f"Scene item: '{item_name}' (enabled: {item.get('sceneItemEnabled', False)})")
-            
-            if not source_found_in_scene:
-                self.logger.debug(f"Source '{self.source_name}' not found in current scene '{current_scene}' - checking if it exists as input")
-                
-                # Check if the source exists at all and get its settings
-                input_response = self._send_request("GetInputSettings", {"inputName": self.source_name})
-                if input_response:
-                    self.logger.debug(f"Source exists as input, assuming it's OK (not in current scene)")
-                    return True
-                else:
-                    self.logger.warning(f"Source '{self.source_name}' doesn't exist as input")
-                    return False
-            
-            return True
-            
-        except Exception as e:
-            self.logger.error(f"Error checking source status: {e}")
-            return False
+    def _is_source_frozen(self, prev_hash):
+        """
+        Check if the source is frozen by comparing screenshot hashes.
+        Returns a tuple: (is_frozen, current_hash)
+        """
+        current_hash = self._get_screenshot_hash()
+        
+        if current_hash is None:
+            self.logger.warning("⚠️ Failed to get screenshot, cannot determine state.")
+            return False, prev_hash # Assume not frozen if we can't get a screenshot
+
+        is_frozen = (current_hash == prev_hash)
+        return is_frozen, current_hash
     
-    def restart_display_capture(self):
-        """Restart the display capture source by toggling capture settings"""
-        current_time = time.time()
-        
-        # Check cooldown period
-        if current_time - self.last_restart_time < self.restart_cooldown:
-            self.logger.info(f"Restart cooldown active. Waiting {self.restart_cooldown - (current_time - self.last_restart_time):.1f} more seconds")
-            return False
-        
+    def _get_screenshot_hash(self):
+        """Get MD5 hash of current source screenshot."""
         try:
-            self.logger.info("\n" + "-" * 60)
-            self.logger.info("""
-🔄 RESTARTING DISPLAY CAPTURE 🔄
-Time: {}
-Source: {}
---------------------------------------------------""".format(
-                datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                self.source_name
-            ))
+            response = self._send_request("GetSourceScreenshot", {
+                "sourceName": self.source_name,
+                "imageFormat": "png",
+                "imageWidth": 320,  # Small size for quick comparison
+                "imageHeight": 180,
+                "imageCompressionQuality": 50
+            })
+            
+            if response and 'responseData' in response:
+                # Extract base64 data from data URL
+                image_data = response['responseData']['imageData'].split(',', 1)[1]
+                # Get MD5 hash of the image data
+                return hashlib.md5(base64.b64decode(image_data)).hexdigest()
+            return None
+        except Exception as e:
+            self.logger.error(f"Failed to get screenshot: {e}")
+            return None
+
+    def _restart_capture(self):
+        """Restart the display capture source by toggling capture settings"""
+        try:
+            current_time = time.time()
+            if current_time - self.last_restart < self.restart_cooldown:
+                self.logger.info("⏳ Skipping restart - cooldown period active")
+                return False
+
+            self.logger.warning(f"\n{'='*50}")
+            self.logger.warning("🔄 RESTARTING DISPLAY CAPTURE")
+            self.logger.warning(f"Source: {self.source_name}")
+            self.logger.warning(f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
             
             # Get current settings
             settings_response = self._send_request("GetInputSettings", {
@@ -306,7 +281,7 @@ Source: {}
             if not settings_response or 'responseData' not in settings_response:
                 self.logger.error("Failed to get source settings")
                 return False
-                
+
             current_settings = settings_response['responseData'].get('inputSettings', {})
             self.logger.debug(f"Current settings: {json.dumps(current_settings, indent=2)}")
             
@@ -328,28 +303,25 @@ Source: {}
             })
             
             if response and response.get('requestStatus', {}).get('result'):
-                self.last_restart_time = current_time
-                self.logger.info("""
-✅ RESTART SUCCESSFUL ✅
---------------------------------------------------""")
+                self.last_restart = current_time
+                self.logger.warning("✅ Restart completed")
+                self.logger.warning(f"{'='*50}\n")
                 return True
             
-            self.logger.error("""
-❌ RESTART FAILED ❌
---------------------------------------------------""")
+            self.logger.error("❌ Restart failed")
             return False
             
         except Exception as e:
-            self.logger.error(f"Failed to restart display capture: {e}")
+            self.logger.error(f"❌ Failed to restart capture: {e}")
             return False
-    
+
     async def monitor_loop(self):
-        """Main monitoring loop"""
+        """Main monitoring loop using screenshot comparison."""
         self.logger.info(f"Starting monitor loop for source '{self.source_name}'")
-        self.logger.info(f"Monitor interval: {self.monitor_interval}s, Max failures before restart: 3")
+        self.logger.info(f"Monitor interval: {self.monitor_interval}s, Stuck threshold: {self.stuck_threshold} frames")
         
-        consecutive_failures = 0
-        max_consecutive_failures = 3
+        prev_hash = None
+        identical_count = 0
         check_count = 0
         
         while self.running:
@@ -357,45 +329,29 @@ Source: {}
                 check_count += 1
                 self.logger.info(f"=== Check #{check_count} ===")
                 
-                # Check if source is still active
-                is_active = self.is_source_active()
-                self.logger.info(f"Source '{self.source_name}' active: {is_active}")
+                is_frozen, current_hash = await asyncio.to_thread(self._is_source_frozen, prev_hash)
                 
-                if not is_active:
-                    consecutive_failures += 1
-                    self.logger.warning(f"Source '{self.source_name}' appears inactive (failure #{consecutive_failures}/{max_consecutive_failures})")
+                if is_frozen:
+                    identical_count += 1
+                    self.logger.warning(f"⚠️ Identical frame detected (count: {identical_count}/{self.stuck_threshold})")
                     
-                    if consecutive_failures >= max_consecutive_failures:
-                        self.logger.warning("""
-⚠️  DISPLAY CAPTURE ISSUE DETECTED ⚠️
-Source: {}
-Failures: {} consecutive checks
-Action: Attempting restart...
---------------------------------------------------""".format(
-                            self.source_name,
-                            consecutive_failures
-                        ))
-                        
-                        if self.restart_display_capture():
-                            consecutive_failures = 0  # Reset counter on successful restart
-                            self.logger.info("✓ Resuming normal monitoring")
-                        else:
-                            self.logger.error("✗ Will retry on next check")
+                    if identical_count >= self.stuck_threshold:
+                        self.logger.warning("❗ Display capture appears to be frozen")
+                        if self._restart_capture():
+                            identical_count = 0  # Reset counter after restart
+                            # After a restart, the hash will be different, so we fetch a new one
+                            current_hash = self._get_screenshot_hash() 
                 else:
-                    if consecutive_failures > 0:
-                        self.logger.info(f"✓ Source '{self.source_name}' is now active again (was inactive for {consecutive_failures} checks)")
-                    else:
-                        self.logger.info(f"✓ Source '{self.source_name}' is active and healthy")
-                    consecutive_failures = 0
+                    if identical_count > 0:
+                        self.logger.info("✅ Frame changed - display capture is active")
+                    identical_count = 0
                 
-                # Wait before next check
-                self.logger.debug(f"Waiting {self.monitor_interval}s before next check...")
+                prev_hash = current_hash
                 await asyncio.sleep(self.monitor_interval)
                 
             except Exception as e:
                 self.logger.error(f"Error in monitor loop: {e}")
-                consecutive_failures += 1
-                await asyncio.sleep(self.monitor_interval)
+                await asyncio.sleep(2)  # Wait before retrying
     
     def signal_handler(self, signum, frame):
         """Handle shutdown signals"""
@@ -444,23 +400,66 @@ Action: Attempting restart...
 
 def main():
     """Main entry point"""
-    # Configuration - modify these as needed
-    SOURCE_NAME = "Safari"  # Name of your Display Capture source in OBS
-    OBS_HOST = "localhost"
-    OBS_PORT = 4455
-    OBS_PASSWORD = ""  # Set if you have a password configured
+    parser = argparse.ArgumentParser(description="OBS Display Capture Monitor")
+    parser.add_argument(
+        '--source', 
+        type=str, 
+        default="Safari", 
+        help="Name of the Display Capture source in OBS"
+    )
+    parser.add_argument(
+        '--host', 
+        type=str, 
+        default="localhost", 
+        help="OBS WebSocket host"
+    )
+    parser.add_argument(
+        '--port', 
+        type=int, 
+        default=4455, 
+        help="OBS WebSocket port"
+    )
+    parser.add_argument(
+        '--password', 
+        type=str, 
+        default="", 
+        help="OBS WebSocket password"
+    )
+    parser.add_argument(
+        '--interval', 
+        type=float, 
+        default=1.0, 
+        help="How often to check for freezes (seconds)"
+    )
+    parser.add_argument(
+        '--threshold', 
+        type=int, 
+        default=1, 
+        help="How many identical frames before considering frozen"
+    )
+    parser.add_argument(
+        '--cooldown', 
+        type=int, 
+        default=30, 
+        help="Minimum time between restarts (seconds)"
+    )
+    
+    args = parser.parse_args()
     
     print(f"OBS Display Capture Monitor")
-    print(f"Monitoring source: {SOURCE_NAME}")
-    print(f"OBS WebSocket: {OBS_HOST}:{OBS_PORT}")
+    print(f"Monitoring source: {args.source}")
+    print(f"OBS WebSocket: {args.host}:{args.port}")
     print(f"Press Ctrl+C to stop")
     print("-" * 50)
     
     monitor = OBSDisplayMonitor(
-        source_name=SOURCE_NAME,
-        host=OBS_HOST,
-        port=OBS_PORT,
-        password=OBS_PASSWORD
+        source_name=args.source,
+        host=args.host,
+        port=args.port,
+        password=args.password,
+        interval=args.interval,
+        threshold=args.threshold,
+        cooldown=args.cooldown
     )
     
     try:

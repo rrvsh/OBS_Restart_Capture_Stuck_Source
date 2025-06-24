@@ -1,193 +1,149 @@
-# OBS Display Capture Monitor
+# OBS Display Capture Monitor for macOS
 
-A Python script that monitors and automatically restarts OBS Studio Display Capture sources when they become inactive. Specifically designed for macOS to handle display capture issues.
+🔧 **Solution for frozen display capture in OBS on macOS!**
 
-## Features
+This script automatically detects and fixes the common issue where OBS display capture freezes on macOS. It works by monitoring the display capture output and automatically restarting it when frozen.
 
-- 🔍 Monitors Display Capture sources in real-time
-- 🔄 Automatically restarts capture when issues are detected
-- 📝 Comprehensive logging with visual markers
-- 🔒 Graceful shutdown handling
-- 🎯 Focused on macOS Display Capture sources
-- 🛠 Uses OBS WebSocket v5 protocol
+## The Problem This Solves
 
-## Requirements
+On macOS, OBS display capture sources often freeze after some time, requiring manual intervention to restart the capture. This script automates the fix by:
+1. Detecting frozen frames by comparing consecutive screenshots
+2. Automatically triggering the "Restart Capture" function
+3. Keeping your stream/recording running smoothly
 
-- OBS Studio 31.0.0 or later
-- Python 3.7 or later
-- OBS WebSocket enabled (Tools → WebSocket Server Settings)
-- Required Python packages:
-  ```
-  websocket-client>=1.8.0
-  ```
+## Why Is This Script Necessary?
 
-## Installation
+You might wonder why we can't just check the status of the "Restart Capture" button directly. The short answer is: **OBS does not expose that "is-stuck" flag through its public APIs (like obs-websocket) yet.**
 
-1. Clone or download this repository
-2. Create and activate a Python virtual environment:
+The "Restart Capture" button you see in the OBS user interface is controlled by an internal state (`has_stalled`) that is:
+*   Kept entirely inside the macOS Screen Capture source plugin.
+*   Used only to enable/disable the button and log a warning.
+*   Never broadcast or made available to external tools.
+
+This means there is no direct way for a script to know when the button is clickable. Developers have requested this feature, but as of OBS versions 30/31, it has not been implemented. This script provides a reliable workaround by monitoring the *visual output* of the source instead of relying on an internal state we can't access.
+
+For more technical details, see the discussions here:
+*   [GitHub Issue #8928: macOS Screen Capture stops working after waking from sleep](https://github.com/obsproject/obs-studio/issues/8928?utm_source=chatgpt.com)
+*   [OBS Forum Thread: Keybind and/or cli argument to restart screen capture](https://obsproject.com/forum/threads/macos-keybind-and-or-cli-argument-to-restart-screen-capture.171415/?utm_source=chatgpt.com)
+
+## Quick Start
+
+1. **Install Python** (if you haven't already):
+   - Download and install Python 3.7 or later from [python.org](https://python.org)
+   - Make sure to check "Add Python to PATH" during installation
+
+2. **Download this script**:
    ```bash
-   python3 -m venv .venv
-   source .venv/bin/activate
+   git clone https://github.com/YOUR_USERNAME/obs-display-monitor
+   cd obs-display-monitor
    ```
-3. Install dependencies:
+
+3. **Install dependencies**:
    ```bash
+   python -m venv .venv
+   source .venv/bin/activate  # On macOS/Linux
    pip install -r requirements.txt
    ```
 
-## Usage
-
-1. Configure OBS WebSocket:
-   - Open OBS Studio
+4. **Configure OBS WebSocket**:
+   - Open OBS
    - Go to Tools → WebSocket Server Settings
-   - Enable WebSocket Server
-   - Note the port (default: 4455)
-   - Set a password if needed
+   - Enable WebSocket server
+   - Set a password (optional but recommended)
+   - Note down the port number (default is 4455)
 
-2. Run the script:
+5. **Run the script**:
    ```bash
-   python obs_display_monitor.py
+   # Basic usage
+   python obs_display_monitor.py --source "Your Display Capture Source Name"
+
+   # With more options
+   python obs_display_monitor.py --source "My Other Screen" --interval 0.5 --threshold 3
    ```
-
-3. For background service:
-   ```bash
-   ./setup_obs_monitor.sh
-   ```
-
-## How It Works
-
-### Monitoring Workflow
-
-1. **Connection**: 
-   - Connects to OBS via WebSocket
-   - Authenticates if password is configured
-   - Verifies target source exists
-
-2. **Monitoring Loop**:
-   - Checks source status every 5 seconds
-   - Tracks consecutive failures
-   - Triggers restart after 3 consecutive failures
-   - Maintains 30-second cooldown between restarts
-
-3. **Restart Process**:
-   - Gets current source settings
-   - Toggles between window/display capture types
-   - Forces OBS to reinitialize the capture
-   - Verifies success
-
-### Key Functions
-
-\`\`\`python
-def restart_display_capture(self):
-    """
-    Restarts display capture by toggling capture type:
-    1. Gets current settings
-    2. Switches from window (type 0) to display (type 1)
-    3. Switches back after delay
-    This forces OBS to reinitialize the capture
-    """
-\`\`\`
-
-\`\`\`python
-def is_source_active(self):
-    """
-    Checks if source is active by:
-    1. Getting current scene
-    2. Finding source in scene items
-    3. Checking enabled status
-    4. Verifying source exists as input
-    """
-\`\`\`
-
-### Log Markers
-
-The script uses distinct visual markers in logs:
-
-```
-⚠️  DISPLAY CAPTURE ISSUE DETECTED ⚠️
-Source: Safari
-Failures: 3 consecutive checks
-Action: Attempting restart...
---------------------------------------------------
-
-🔄 RESTARTING DISPLAY CAPTURE 🔄
-Time: 2025-06-24 03:59:23
-Source: Safari
---------------------------------------------------
-
-✅ RESTART SUCCESSFUL ✅
---------------------------------------------------
-```
 
 ## Configuration
 
-Key settings in `obs_display_monitor.py`:
+All configuration is done via command-line arguments. Here are the most common ones:
 
-```python
-SOURCE_NAME = "Safari"    # Name of Display Capture source
-OBS_HOST = "localhost"    # OBS WebSocket host
-OBS_PORT = 4455          # OBS WebSocket port
-OBS_PASSWORD = ""        # OBS WebSocket password if set
+| Argument | Default | Description |
+|---|---|---|
+| `--source` | "Safari" | The name of your Display Capture source in OBS. |
+| `--host` | "localhost" | The hostname or IP address of the computer running OBS. |
+| `--port` | 4455 | The port for the OBS WebSocket server. |
+| `--password` | "" | The password for the OBS WebSocket server. |
+| `--interval` | 1.0 | How often (in seconds) to check for a frozen frame. |
+| `--threshold` | 1 | How many identical frames to see before triggering a restart. |
+| `--cooldown` | 30 | Minimum time (in seconds) to wait between restarts. |
 
-# Monitoring settings
-monitor_interval = 5.0    # Check interval in seconds
-restart_cooldown = 30.0   # Minimum time between restarts
-max_consecutive_failures = 3  # Failures before restart
+To see all available options, run:
+```bash
+python obs_display_monitor.py --help
 ```
 
 ## Troubleshooting
 
-1. **Connection Issues**:
-   - Verify OBS is running
-   - Check WebSocket server is enabled
-   - Confirm port number
-   - Check password if configured
+1. **"Cannot connect to OBS" error**:
+   - Make sure OBS is running
+   - Check if WebSocket server is enabled in OBS
+   - Verify the port number matches
+   - Try without password first, then add password if needed
 
-2. **Source Not Found**:
-   - Verify source name matches exactly
-   - Check source exists in current scene
-   - Confirm source type is Display Capture
+2. **"Source not found" error**:
+   - Double-check your display capture source name in OBS
+   - The name is case-sensitive
+   - Make sure the source is in the current scene
 
-3. **Restart Not Working**:
-   - Check OBS logs for errors
-   - Verify source settings
-   - Try manual restart for comparison
+3. **Script not detecting freezes**:
+   - Increase logging level for more details
+   - Try reducing monitor_interval to 0.5
+   - Check if the source is actually visible in OBS
 
-## Logs
+## How It Works
 
-Logs are stored in `~/fun/LiveStream/utils/logs/obs_monitor.log` with the following information:
-- Connection status
-- Source checks
-- Restart attempts and results
-- Error messages
+The script uses a smart detection method and a safe restart process to keep your stream running.
 
-## Testing
+### 1. Freeze Detection
+The script continuously monitors the display capture source by:
+1.  Taking a small, low-quality screenshot of the source every second.
+2.  Calculating a unique "fingerprint" (an MD5 hash) of the screenshot.
+3.  Comparing this fingerprint to the previous one. If they are the same for a few checks in a row, the script concludes the source is frozen.
 
-Use `test_restart.py` to verify restart functionality:
-```bash
-python test_restart.py
-```
+This method is highly efficient and reliable.
+
+### 2. Restart Process
+Once a freeze is detected, the script performs a safe restart that **preserves all your settings**:
+1.  It first saves the current settings of your display capture source (which display it's capturing, whether the cursor is shown, etc.).
+2.  It quickly toggles the capture type (e.g., from "Display Capture" to "Window Capture").
+3.  It immediately toggles it back to the original type, using the saved settings.
+
+This toggle forces OBS to completely reinitialize the display capture, which unfreezes it, all without changing your source's configuration.
+
+## Requirements
+
+- macOS (tested on Ventura and Sonoma)
+- OBS Studio 28.0.0 or later
+- Python 3.7 or later
+- OBS WebSocket enabled
+- Required Python packages (installed via requirements.txt):
+  ```
+  websocket-client>=1.8.0
+  ```
+
+## Support
+
+If you encounter any issues:
+1. Check the logs in `logs/obs_monitor.log`
+2. Enable debug logging for more details
+3. Create an issue on GitHub with your log file
+4. Include your macOS and OBS versions
+
+## Contributing
+
+Found a bug or want to improve the script? Feel free to:
+1. Open an issue
+2. Submit a pull request
+3. Share your experience in the OBS forums
 
 ## License
 
-MIT License - Feel free to modify and distribute as needed.
-
-## Service Management
-
-To manage the background service:
-
-```bash
-# Check service status
-launchctl list | grep com.obs.display-monitor
-
-# Stop the service
-launchctl unload ~/Library/LaunchAgents/com.obs.display-monitor.plist
-
-# Start the service
-launchctl load ~/Library/LaunchAgents/com.obs.display-monitor.plist
-
-# Restart the service
-launchctl unload ~/Library/LaunchAgents/com.obs.display-monitor.plist && launchctl load ~/Library/LaunchAgents/com.obs.display-monitor.plist
-
-# View service logs
-tail -f ~/fun/LiveStream/utils/logs/obs_monitor.log
-``` 
+MIT License - Feel free to use and modify! 
