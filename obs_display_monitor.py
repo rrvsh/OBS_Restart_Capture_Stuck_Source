@@ -48,7 +48,7 @@ class OBSDisplayMonitor:
         
     def setup_logging(self):
         """Setup logging configuration"""
-        log_dir = Path.home() / "fun" / "LiveStream" / "utils" / "logs"
+        log_dir = Path.cwd() / "logs"
         log_dir.mkdir(parents=True, exist_ok=True)
         
         log_file = log_dir / "obs_monitor.log"
