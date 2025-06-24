@@ -268,7 +268,7 @@ class OBSDisplayMonitor:
                 self.logger.info("⏳ Skipping restart - cooldown period active")
                 return False
 
-            self.logger.warning(f"\n{'='*50}")
+            self.logger.warning(f"{'='*50}")
             self.logger.warning("🔄 RESTARTING DISPLAY CAPTURE")
             self.logger.warning(f"Source: {self.source_name}")
             self.logger.warning(f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
@@ -305,7 +305,7 @@ class OBSDisplayMonitor:
             if response and response.get('requestStatus', {}).get('result'):
                 self.last_restart = current_time
                 self.logger.warning("✅ Restart completed")
-                self.logger.warning(f"{'='*50}\n")
+                self.logger.warning(f"{'='*50}")
                 return True
             
             self.logger.error("❌ Restart failed")
