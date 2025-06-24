@@ -11,20 +11,42 @@ On macOS, OBS display capture sources often freeze after some time, requiring ma
 2. Automatically triggering the "Restart Capture" function
 3. Keeping your stream/recording running smoothly
 
-## Why Is This Script Necessary?
+## Example Output
 
-You might wonder why we can't just check the status of the "Restart Capture" button directly. The short answer is: **OBS does not expose that "is-stuck" flag through its public APIs (like obs-websocket) yet.**
+Here is what the script's output looks like in your terminal when it detects and restarts a frozen source.
 
-The "Restart Capture" button you see in the OBS user interface is controlled by an internal state (`has_stalled`) that is:
-*   Kept entirely inside the macOS Screen Capture source plugin.
-*   Used only to enable/disable the button and log a warning.
-*   Never broadcast or made available to external tools.
+```log
+$ python obs_display_monitor.py --source "Safari"
+OBS Display Capture Monitor
+Monitoring source: Safari
+OBS WebSocket: localhost:4455
+Press Ctrl+C to stop
+--------------------------------------------------
+2025-06-24 08:19:22,490 - INFO - Starting OBS Display Capture Monitor
+2025-06-24 08:19:22,491 - INFO - Connecting to OBS WebSocket at localhost:4455
+2025-06-24 08:19:22,498 - INFO - Connected to OBS Studio 31.0.3
+2025-06-24 08:19:22,498 - INFO - Checking if source 'Safari' exists...
+2025-06-24 08:19:22,499 - INFO - Found 4 inputs in OBS: ['Mic/Aux', 'gopro', 'logi webcam', 'Safari']
+2025-06-24 08:19:22,499 - INFO - ✓ Source 'Safari' found in OBS
+2025-06-24 08:19:22,499 - INFO - Starting monitor loop for source 'Safari'
+2025-06-24 08:19:22,499 - INFO - Monitor interval: 1.0s, Stuck threshold: 1 frames
+2025-06-24 08:19:22,499 - INFO - === Check #1 ===
+2025-06-24 08:19:23,532 - INFO - === Check #2 ===
+2025-06-24 08:19:23,577 - WARNING - ⚠️  Identical frame detected (count: 1/1)
+2025-06-24 08:19:23,577 - WARNING - ❗ Display capture appears to be frozen
+2025-06-24 08:19:23,577 - WARNING - 
+==================================================
+2025-06-24 08:19:23,577 - WARNING - 🔄 RESTARTING DISPLAY CAPTURE
+2025-06-24 08:19:23,577 - WARNING - Source: Safari
+2025-06-24 08:19:23,577 - WARNING - Time: 2025-06-24 08:19:23
+2025-06-24 08:19:24,082 - WARNING - ✅ Restart completed
+2025-06-24 08:19:24,082 - WARNING - ==================================================
 
-This means there is no direct way for a script to know when the button is clickable. Developers have requested this feature, but as of OBS versions 30/31, it has not been implemented. This script provides a reliable workaround by monitoring the *visual output* of the source instead of relying on an internal state we can't access.
+2025-06-24 08:19:25,090 - INFO - === Check #3 ===
+2025-06-24 08:19:26,149 - INFO - === Check #4 ===
+```
 
-For more technical details, see the discussions here:
-*   [GitHub Issue #8928: macOS Screen Capture stops working after waking from sleep](https://github.com/obsproject/obs-studio/issues/8928?utm_source=chatgpt.com)
-*   [OBS Forum Thread: Keybind and/or cli argument to restart screen capture](https://obsproject.com/forum/threads/macos-keybind-and-or-cli-argument-to-restart-screen-capture.171415/?utm_source=chatgpt.com)
+As you can see, the script logs every check. When it finds an identical frame, it logs a warning and immediately attempts a restart. After a successful restart, it goes back to its normal monitoring routine.
 
 ## Quick Start
 
@@ -53,6 +75,8 @@ For more technical details, see the discussions here:
    - Note down the port number (default is 4455)
 
 5. **Run the script**:
+   
+   It's recommended to use [tmux](https://github.com/tmux/tmux/wiki) to leave following command running in the backend robustly. 
    ```bash
    # Basic usage
    python obs_display_monitor.py --source "Your Display Capture Source Name"
@@ -60,7 +84,6 @@ For more technical details, see the discussions here:
    # With more options
    python obs_display_monitor.py --source "My Other Screen" --interval 0.5 --threshold 3
    ```
-
 ## Configuration
 
 All configuration is done via command-line arguments. Here are the most common ones:
@@ -79,6 +102,22 @@ To see all available options, run:
 ```bash
 python obs_display_monitor.py --help
 ```
+
+## Why Is This Script Necessary?
+
+You might wonder why we can't just check the status of the "Restart Capture" button directly. The short answer is: **OBS does not expose that "is-stuck" flag through its public APIs (like obs-websocket) yet.**
+
+The "Restart Capture" button you see in the OBS user interface is controlled by an internal state (`has_stalled`) that is:
+*   Kept entirely inside the macOS Screen Capture source plugin.
+*   Used only to enable/disable the button and log a warning.
+*   Never broadcast or made available to external tools.
+
+This means there is no direct way for a script to know when the button is clickable. Developers have requested this feature, but as of OBS versions 30/31, it has not been implemented. This script provides a reliable workaround by monitoring the *visual output* of the source instead of relying on an internal state we can't access.
+
+For more technical details, see the discussions here:
+*   [GitHub Issue #8928: macOS Screen Capture stops working after waking from sleep](https://github.com/obsproject/obs-studio/issues/8928?utm_source=chatgpt.com)
+*   [OBS Forum Thread: Keybind and/or cli argument to restart screen capture](https://obsproject.com/forum/threads/macos-keybind-and-or-cli-argument-to-restart-screen-capture.171415/?utm_source=chatgpt.com)
+
 
 ## Troubleshooting
 
