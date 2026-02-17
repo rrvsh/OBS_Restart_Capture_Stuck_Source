@@ -50,6 +50,45 @@ As you can see, the script logs every check. When it finds an identical frame, i
 
 ## Quick Start
 
+### One-command Nix run
+
+If you have Nix installed, you can run the monitor without installing Python or pip packages:
+
+```bash
+nix run . -- --source "Your Display Capture Source Name"
+```
+
+To see all options:
+
+```bash
+nix run . -- --help
+```
+
+### nix-darwin service
+
+Add this repo as a flake input and enable the service in your `darwinConfiguration`:
+
+```nix
+{
+  inputs.obs-unflakify.url = "github:YOUR_USERNAME/OBS_Restart_Capture_Stuck_Source";
+
+  outputs = { self, nixpkgs, darwin, obs-unflakify, ... }:
+    {
+      darwinConfigurations."your-host" = darwin.lib.darwinSystem {
+        modules = [
+          obs-unflakify.darwinModules.obs-unflakify
+          {
+            services.obs-unflakify.enable = true;
+            services.obs-unflakify.source = "Your Display Capture Source Name";
+            # services.obs-unflakify.password = "optional";
+            # services.obs-unflakify.passwordFile = "/run/secrets/obs-websocket";
+          }
+        ];
+      };
+    };
+}
+```
+
 1. **Install Python** (if you haven't already):
    - Download and install Python 3.7 or later from [python.org](https://python.org)
    - Make sure to check "Add Python to PATH" during installation
